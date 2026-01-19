@@ -265,17 +265,52 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Fetch data function
+# Fetch data function with retry logic
 @st.cache_data(ttl=3600)
 def load_stock_data(ticker, start_date, end_date):
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(start=start_date, end=end_date)
-        info = stock.info
-        return df, info
-    except Exception as e:
-        st.error(f"Error loading data for {ticker}: {str(e)}")
-        return None, None
+    import time
+    max_retries = 3
+    retry_delay = 2  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            # Use period parameter instead of dates to avoid rate limits
+            df = stock.history(period="2y")  # Get 2 years of data
+
+            # Filter to requested date range
+            df = df[df.index >= start_date]
+
+            if df.empty:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    st.error(f"No data available for {ticker}")
+                    return None, None
+
+            # Get basic info - this can sometimes fail, so handle separately
+            try:
+                info = stock.info
+            except:
+                info = {"shortName": ticker}
+
+            return df, info
+
+        except Exception as e:
+            if "Too Many Requests" in str(e) or "429" in str(e):
+                if attempt < max_retries - 1:
+                    st.warning(f"Rate limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    st.error(f"Rate limit exceeded. Please try again in a few minutes.")
+                    return None, None
+            else:
+                st.error(f"Error loading data for {ticker}: {str(e)}")
+                return None, None
+
+    return None, None
 
 # Stock configuration
 STOCKS = {
